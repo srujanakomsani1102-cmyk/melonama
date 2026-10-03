@@ -1,0 +1,44 @@
+# Python virtual environments
+venv/
+venv_backend/
+venv_frontend/
+.venv/
+.venv_frontend/
+.venv_backend/
+
+# Model files
+*.safetensors
+*.pth
+*.pt
+*.h5
+*.onnx
+
+# Datasets
+HAM10000/
+ISIC/
+datasets/
+data/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project databases
+*.db
+
+# Generated outputs / temporary files
+outputs/
+temp/
+
+# Project archive files
+*.zip
