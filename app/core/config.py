@@ -51,7 +51,6 @@ SEGMENTATION_MODEL_DIR = MODELS_DIR / "segmentation"
 IMAGE_TYPE_MODEL_DIR = MODELS_DIR / "image_type"
 
 ULTRALIGHT_VMUNET_DIR = Path(os.getenv("ULTRALIGHT_VMUNET_DIR", str(SEGMENTATION_MODEL_DIR / "ultralight_vmunet")))
-SAM2_MODEL_DIR = Path(os.getenv("SAM2_MODEL_DIR", str(SEGMENTATION_MODEL_DIR / "sam2")))
 CLIP_MODEL_DIR = Path(os.getenv("CLIP_MODEL_DIR", str(MODELS_DIR / "clip")))
 
 # ============================================================
@@ -80,7 +79,6 @@ for directory in [
     SEGMENTATION_MODEL_DIR,
     IMAGE_TYPE_MODEL_DIR,
     ULTRALIGHT_VMUNET_DIR,
-    SAM2_MODEL_DIR,
     CLIP_MODEL_DIR,
 ]:
     directory.mkdir(parents=True, exist_ok=True)
@@ -91,11 +89,6 @@ MODEL_RUNTIME_STATUS = {
         "env_var": "ULTRALIGHT_VMUNET_DIR",
         "path": str(ULTRALIGHT_VMUNET_DIR),
         "configured": bool(os.getenv("ULTRALIGHT_VMUNET_DIR")),
-    },
-    "sam2": {
-        "env_var": "SAM2_MODEL_DIR",
-        "path": str(SAM2_MODEL_DIR),
-        "configured": bool(os.getenv("SAM2_MODEL_DIR")),
     },
     "clip": {
         "env_var": "CLIP_MODEL_DIR",

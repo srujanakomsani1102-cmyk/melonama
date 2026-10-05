@@ -66,7 +66,7 @@ def vis_raw(image_path: str, remove_hair_flag: bool = False) -> bytes:
 
 
 def vis_mask(image_path: str, remove_hair_flag: bool = False) -> bytes:
-    mask = segment_lesion(image_path, remove_hair=remove_hair_flag)
+    mask = segment_lesion(image_path, remove_hair_flag=remove_hair_flag)
     out = cv2.cvtColor((mask * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
     return _encode(out)
 
@@ -75,7 +75,7 @@ def vis_mask_overlay(image_path: str, remove_hair_flag: bool = False) -> bytes:
     img = _load(image_path)
     if remove_hair_flag:
         img = remove_hair(img)
-    mask = segment_lesion(image_path, remove_hair=remove_hair_flag)
+    mask = segment_lesion(image_path, remove_hair_flag=remove_hair_flag)
     overlay = img.copy()
     overlay[mask == 1] = (0.35 * overlay[mask == 1] + 0.65 * np.array([0, 0, 255])).astype(np.uint8)
     contour = _lesion_contour(mask)
@@ -89,7 +89,7 @@ def vis_asymmetry(image_path: str, remove_hair_flag: bool = False) -> bytes:
     img = _load(image_path)
     if remove_hair_flag:
         img = remove_hair(img)
-    mask = segment_lesion(image_path, remove_hair=remove_hair_flag)
+    mask = segment_lesion(image_path, remove_hair_flag=remove_hair_flag)
 
     ys, xs = np.nonzero(mask)
     if len(xs) < 10:
@@ -126,7 +126,7 @@ def vis_border(image_path: str, remove_hair_flag: bool = False) -> bytes:
     img = _load(image_path)
     if remove_hair_flag:
         img = remove_hair(img)
-    mask = segment_lesion(image_path, remove_hair=remove_hair_flag)
+    mask = segment_lesion(image_path, remove_hair_flag=remove_hair_flag)
     contour = _lesion_contour(mask)
     if contour is None or len(contour) < 15:
         return _encode(img, ".jpg")
@@ -155,7 +155,7 @@ def vis_caliper(image_path: str, scale_px_per_mm: float | None = None,
     img = _load(image_path)
     if remove_hair_flag:
         img = remove_hair(img)
-    mask = segment_lesion(image_path, remove_hair=remove_hair_flag)
+    mask = segment_lesion(image_path, remove_hair_flag=remove_hair_flag)
 
     (p1, p2), dist = farthest_points(mask)
     if p1 is None:

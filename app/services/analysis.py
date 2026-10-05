@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Optional
 
 import cv2
@@ -28,11 +29,48 @@ from app.services.abcde.evolution import compute_evolution
 from app.services.classification import classify
 from app.services.report_generation import generate_structured_report
 from app.services.report_fact_checker import validate_report
+
+
 # ============================================================
 # RAG IMPORT
 # ============================================================
 
 from app.rag.rag_service import retrieve_melanoma_evidence
+
+
+# ============================================================
+# SEGMENTATION OVERLAY HELPER
+# ============================================================
+
+def _save_segmentation_overlay(
+    image_rgb: np.ndarray,
+    mask: np.ndarray,
+    save_path: Path,
+) -> None:
+    """
+    Save a coloured mask overlay (red fill + cyan contour)
+    as a PNG next to the uploaded image file.
+    """
+    bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+    overlay = bgr.copy()
+
+    # Semi-transparent red fill over the lesion
+    lesion_pixels = mask == 1
+    overlay[lesion_pixels] = (
+        0.35 * overlay[lesion_pixels]
+        + 0.65 * np.array([0, 0, 220], dtype=np.float32)
+    ).astype(np.uint8)
+
+    # Cyan contour outline
+    contours, _ = cv2.findContours(
+        (mask > 0).astype(np.uint8),
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    if contours:
+        cv2.drawContours(overlay, contours, -1, (0, 255, 255), 2)
+
+    cv2.imwrite(str(save_path), overlay)
 
 
 # ============================================================
@@ -125,6 +163,7 @@ def analyze_image(
         return {
             "status": "invalid",
             "validation": validation,
+            "segmentation_path": None,
             "rejection_stage": "basic_validation",
         }
 
@@ -148,6 +187,36 @@ def analyze_image(
         image = cv2.cvtColor(
             remove_hair(image_bgr),
             cv2.COLOR_BGR2RGB,
+        )
+
+    # ========================================================
+    # 2B. EARLY SEGMENTATION — always runs regardless of
+    #     calibration outcome, so the overlay is available
+    #     for every response (valid OR rejected).
+    # ========================================================
+
+    _seg_overlay_path = (
+        Path(image_path).parent
+        / (Path(image_path).stem + "_seg.png")
+    )
+    segmentation_path: Optional[str] = None
+    _early_mask: Optional[np.ndarray] = None
+
+    try:
+        _early_mask = segment_lesion(
+            image_path,
+            remove_hair_flag=remove_hair_flag,
+        )
+        _save_segmentation_overlay(
+            image,
+            _early_mask,
+            _seg_overlay_path,
+        )
+        segmentation_path = str(_seg_overlay_path)
+
+    except Exception as _seg_exc:
+        print(
+            f"[analysis] Early segmentation warning: {_seg_exc}"
         )
 
     # ========================================================
@@ -193,6 +262,7 @@ def analyze_image(
             "status": "invalid",
             "validation": validation,
             "calibration": calibration,
+            "segmentation_path": segmentation_path,
             "rejection_stage": "calibration",
         }
 
@@ -211,11 +281,27 @@ def analyze_image(
         or calibration.get("corners")
     )
 
-    mask = segment_lesion(
-        image_path,
-        remove_hair_flag=remove_hair_flag,
-        exclude_polygon=exclude_polygon,
-    )
+    # Re-run segmentation with the calibration exclude_polygon
+    # for accurate ABCDE measurements. If early mask already
+    # exists and no polygon exclusion is needed, reuse it.
+    if exclude_polygon is not None or _early_mask is None:
+        mask = segment_lesion(
+            image_path,
+            remove_hair_flag=remove_hair_flag,
+            exclude_polygon=exclude_polygon,
+        )
+        # Update the overlay with the refined mask
+        try:
+            _save_segmentation_overlay(
+                image,
+                mask,
+                _seg_overlay_path,
+            )
+            segmentation_path = str(_seg_overlay_path)
+        except Exception:
+            pass
+    else:
+        mask = _early_mask
 
     # ========================================================
     # 6. Post-segmentation quality gate
@@ -237,6 +323,7 @@ def analyze_image(
             "status": "invalid",
             "validation": validation,
             "calibration": calibration,
+            "segmentation_path": segmentation_path,
             "rejection_stage": "post_segmentation_quality",
         }
 
@@ -272,6 +359,7 @@ def analyze_image(
             "status": "invalid",
             "validation": validation,
             "calibration": calibration,
+            "segmentation_path": segmentation_path,
             "rejection_stage": "calibration",
         }
 
@@ -450,6 +538,8 @@ def analyze_image(
         "image_type": image_type,
 
         "calibration": calibration,
+
+        "segmentation_path": segmentation_path,
 
         "features": flat,
 

@@ -480,6 +480,11 @@ async def analyze(
                 "rejection_stage": result.get(
                     "rejection_stage"
                 ),
+                "segmentation_url": (
+                    f"/api/v1/segmentation/{file_id}"
+                    if result.get("segmentation_path")
+                    else None
+                ),
             },
         )
 
@@ -526,6 +531,10 @@ async def analyze(
 
         "stored_path": str(
             stored_path
+        ),
+
+        "segmentation_path": result.get(
+            "segmentation_path"
         ),
 
         "is_valid": True,
@@ -698,6 +707,12 @@ async def analyze(
 
         "image_url": (
             f"/api/v1/images/{analysis_id}"
+        ),
+
+        "segmentation_url": (
+            f"/api/v1/images/{analysis_id}/segmentation"
+            if result.get("segmentation_path")
+            else None
         ),
 
         "filename": image.filename,
@@ -1244,6 +1259,46 @@ def get_image(
 
     return FileResponse(
         stored_path
+    )
+
+
+# ============================================================
+# SEGMENTATION OVERLAY IMAGE
+# ============================================================
+
+@router.get("/images/{analysis_id}/segmentation")
+def get_segmentation_image(
+    analysis_id: str,
+):
+    """
+    Serve the segmentation overlay PNG for an analysis.
+    The overlay shows the lesion mask (red fill + cyan contour)
+    on the original image. Available for ALL analyses, including
+    those rejected by calibration or quality gates.
+    """
+
+    analysis = analyses_collection.find_one(
+        {"_id": analysis_id}
+    )
+
+    if not analysis:
+        raise HTTPException(
+            status_code=404,
+            detail="Analysis not found.",
+        )
+
+    seg_path = analysis.get("segmentation_path")
+
+    if not seg_path or not Path(seg_path).exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Segmentation image not available.",
+        )
+
+    return FileResponse(
+        seg_path,
+        media_type="image/png",
+        filename=f"segmentation_{analysis_id}.png",
     )
 
 

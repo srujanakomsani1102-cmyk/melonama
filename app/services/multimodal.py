@@ -26,7 +26,7 @@ from app.services.contrastive import contrastive_aligner
 from app.services.explainability import generate_explanation
 from app.services.llm_report import llm_report_synthesizer
 from app.services.segmentation import segment_lesion
-from app.services.segmentation_model import segment_with_vmunet_sam2
+from app.services.segmentation_model import segment_with_vmunet
 
 
 def run_vision_transformer(
@@ -70,43 +70,28 @@ def run_segmentation(
     image_path: str | None = None,
 ) -> dict[str, Any]:
 
-    quality = float(
-        mask_quality if mask_quality is not None else 0.88
-    )
-
     if image_path:
-        segmentation = segment_with_vmunet_sam2(
+        segmentation = segment_with_vmunet(
             image_path,
-            prompt="lesion mask",
         )
     else:
         segmentation = {
-            "vmunet": {
-                "model": "UltraLight-VM-UNet",
-                "status": "configured",
-                "quality_score": quality,
-                "note": (
-                    "Model adapter is ready; provide an image "
-                    "path to execute the actual mask generation."
-                ),
-            },
-            "sam2": {
-                "model": "SAM2",
-                "status": "configured",
-                "prompt": "lesion mask",
-                "note": (
-                    "SAM2 refinement is ready once model weights "
-                    "are configured."
-                ),
-            },
+            "model": "UltraLight-VM-UNet",
+            "status": "configured",
+            "quality_score": float(
+                mask_quality if mask_quality is not None else 0.88
+            ),
+            "note": (
+                "VM-UNet adapter is ready; "
+                "provide an image path to execute mask generation."
+            ),
+            "mask_available": False,
             "final_mask_status": "configured",
         }
 
-    vmunet = segmentation.get("vmunet", {})
-
     return {
         "method": "clinical_explanation_pipeline",
-        "model": "UltraLight VM-UNet + SAM2",
+        "model": "UltraLight-VM-UNet",
         "status": segmentation.get(
             "final_mask_status",
             "ready",
@@ -116,22 +101,21 @@ def run_segmentation(
             min(
                 1.0,
                 float(
-                    vmunet.get(
+                    segmentation.get(
                         "quality_score",
-                        quality,
+                        0.0,
                     )
                 ),
             ),
         ),
         "branch": "Clinical Explanation Pipeline",
-        "vmunet": vmunet,
-        "sam2": segmentation.get(
-            "sam2",
-            {},
+        "mask_available": bool(
+            segmentation.get("mask_available", False)
         ),
-        "note": (
-            "This branch isolates the lesion region and derives "
-            "the ABCDE features."
+        "note": segmentation.get(
+            "note",
+            "UltraLight VM-UNet isolates the lesion region "
+            "and derives the ABCDE features.",
         ),
     }
 
@@ -617,6 +601,10 @@ def run_multimodal_pipeline(
 def run_image_segmentation_to_abcde(
     image_path: str,
 ) -> dict[str, Any]:
+    """
+    Run VM-UNet segmentation and extract ABCDE features from the mask.
+    All clinical features are derived exclusively from the VM-UNet mask.
+    """
 
     if not image_path:
         raise ValueError(
@@ -624,31 +612,21 @@ def run_image_segmentation_to_abcde(
             "the segmentation-to-ABCDE flow."
         )
 
-    segmentation = (
-        segment_with_vmunet_sam2(
-            image_path,
-            prompt="lesion mask",
-        )
+    segmentation = segment_with_vmunet(
+        image_path,
     )
 
     mask = None
 
     try:
-
-        mask = segment_lesion(
-            image_path
-        )
-
+        mask = segment_lesion(image_path)
     except Exception:
-
         mask = None
 
     features = {
         "asymmetry": 0.0,
         "border_irregularity": 0.0,
-        "color": {
-            "index": 0.0,
-        },
+        "color": {"index": 0.0},
         "color_index": 0.0,
         "diameter_mm": None,
     }
@@ -657,70 +635,38 @@ def run_image_segmentation_to_abcde(
 
         try:
 
-            image = cv2.imread(
-                image_path
-            )
+            image = cv2.imread(image_path)
 
             if image is not None:
 
-                extracted = (
-                    extract_abcde_features(
-                        image,
-                        mask,
-                        pixels_per_mm=1.0,
-                    )
+                extracted = extract_abcde_features(
+                    image,
+                    mask,
+                    pixels_per_mm=1.0,
                 )
 
-                color = extracted.get(
-                    "color",
-                    {},
-                )
-
+                color = extracted.get("color", {})
                 color_index = float(
-                    color.get(
-                        "index",
-                        0.0,
-                    )
-                    or 0.0
+                    color.get("index", 0.0) or 0.0
                 )
-
-                diameter = extracted.get(
-                    "diameter",
-                    {},
-                ) or {}
+                diameter = extracted.get("diameter", {}) or {}
 
                 features = {
-                    "asymmetry": extracted.get(
-                        "asymmetry",
-                        0.0,
-                    ),
+                    "asymmetry": extracted.get("asymmetry", 0.0),
                     "border_irregularity": extracted.get(
-                        "border_irregularity",
-                        0.0,
+                        "border_irregularity", 0.0
                     ),
                     "color": {
-                        "h": color.get(
-                            "h",
-                            0.0,
-                        ),
-                        "s": color.get(
-                            "s",
-                            0.0,
-                        ),
-                        "v": color.get(
-                            "v",
-                            0.0,
-                        ),
+                        "h": color.get("h", 0.0),
+                        "s": color.get("s", 0.0),
+                        "v": color.get("v", 0.0),
                         "index": color_index,
                     },
                     "color_index": color_index,
-                    "diameter_mm": diameter.get(
-                        "max_diameter_mm"
-                    ),
+                    "diameter_mm": diameter.get("max_diameter_mm"),
                 }
 
         except Exception:
-
             pass
 
     return {
