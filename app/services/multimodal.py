@@ -1,15 +1,20 @@
 """Multimodal melanoma assessment pipeline.
 
 Flow:
+
     Dermoscopic image
         -> ViT visual encoder
-        -> segmentation
+        -> UltraLight VM-UNet segmentation
         -> ABCDE extraction
         -> 16-D clinical vector
         -> trained cross-modal contrastive alignment
         -> melanoma assessment
         -> CLIP concepts
         -> structured report
+
+Important:
+    UltraLight VM-UNet is the only automatic segmentation model.
+    SAM2 is not part of the production segmentation pipeline.
 """
 
 from __future__ import annotations
@@ -29,9 +34,14 @@ from app.services.segmentation import segment_lesion
 from app.services.segmentation_model import segment_with_vmunet
 
 
+# ============================================================
+# VISION TRANSFORMER
+# ============================================================
+
 def run_vision_transformer(
     classification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Expose the primary ViT classification result."""
 
     payload = classification or {}
 
@@ -65,10 +75,19 @@ def run_vision_transformer(
     }
 
 
+# ============================================================
+# SEGMENTATION
+# ============================================================
+
 def run_segmentation(
     mask_quality: float | None = None,
     image_path: str | None = None,
 ) -> dict[str, Any]:
+    """
+    Run UltraLight VM-UNet segmentation.
+
+    SAM2 is intentionally not used here.
+    """
 
     if image_path:
         segmentation = segment_with_vmunet(
@@ -79,10 +98,10 @@ def run_segmentation(
             "model": "UltraLight-VM-UNet",
             "status": "configured",
             "quality_score": float(
-                mask_quality if mask_quality is not None else 0.88
+                mask_quality if mask_quality is not None else 0.0
             ),
             "note": (
-                "VM-UNet adapter is ready; "
+                "UltraLight VM-UNet adapter is ready; "
                 "provide an image path to execute mask generation."
             ),
             "mask_available": False,
@@ -94,7 +113,7 @@ def run_segmentation(
         "model": "UltraLight-VM-UNet",
         "status": segmentation.get(
             "final_mask_status",
-            "ready",
+            segmentation.get("status", "ready"),
         ),
         "quality_score": max(
             0.0,
@@ -105,24 +124,35 @@ def run_segmentation(
                         "quality_score",
                         0.0,
                     )
+                    or 0.0
                 ),
             ),
         ),
         "branch": "Clinical Explanation Pipeline",
         "mask_available": bool(
-            segmentation.get("mask_available", False)
+            segmentation.get(
+                "mask_available",
+                False,
+            )
         ),
         "note": segmentation.get(
             "note",
-            "UltraLight VM-UNet isolates the lesion region "
-            "and derives the ABCDE features.",
+            (
+                "UltraLight VM-UNet isolates the lesion "
+                "region and derives the ABCDE features."
+            ),
         ),
     }
 
 
+# ============================================================
+# COLOR HELPER
+# ============================================================
+
 def _get_color_index(
     features: dict[str, Any],
 ) -> float:
+    """Return the normalized color-variation index."""
 
     if "color_index" in features:
         return float(
@@ -147,9 +177,17 @@ def _get_color_index(
     )
 
 
+# ============================================================
+# ABCDE FEATURES
+# ============================================================
+
 def extract_abc_features(
     abcde: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """
+    Normalize the ABCDE information exposed by the main
+    analysis pipeline.
+    """
 
     features = abcde or {}
 
@@ -178,7 +216,6 @@ def extract_abc_features(
     )
 
     if diameter_mm is None:
-
         diameter = features.get(
             "diameter",
             {},
@@ -208,10 +245,15 @@ def extract_abc_features(
     }
 
 
+# ============================================================
+# IMAGE FEATURES
+# ============================================================
+
 def build_image_features(
     classification: dict[str, Any] | None = None,
     abcde: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Build the compact image-side feature representation."""
 
     payload = classification or {}
     features = abcde or {}
@@ -263,11 +305,22 @@ def build_image_features(
     }
 
 
+# ============================================================
+# CONTRASTIVE ALIGNMENT
+# ============================================================
+
 def run_contrastive_alignment(
     classification: dict[str, Any] | None = None,
     abcde: dict[str, Any] | None = None,
     image_path: str | None = None,
 ) -> dict[str, Any]:
+    """
+    Align the visual representation with the clinical feature
+    representation.
+
+    The contrastive branch is supporting evidence only. It does
+    not silently modify the primary ViT melanoma probability.
+    """
 
     features = abcde or {}
 
@@ -280,26 +333,21 @@ def run_contrastive_alignment(
         features
     )
 
+    # --------------------------------------------------------
     # Compatibility mode for architecture/unit tests.
-    #
-    # The real application path uses image_path and therefore
-    # computes the actual trained ViT-to-ABCDE alignment.
+    # --------------------------------------------------------
     if (
         not image_path
         or not os.path.exists(image_path)
     ):
-
         try:
-
             fallback_score = (
                 contrastive_aligner.compute_similarity(
                     image_features,
                     clinical_features,
                 )
             )
-
         except Exception:
-
             fallback_score = 0.0
 
         return {
@@ -329,7 +377,6 @@ def run_contrastive_alignment(
         }
 
     try:
-
         alignment = (
             contrastive_aligner.compute_alignment(
                 image_path=image_path,
@@ -356,8 +403,10 @@ def run_contrastive_alignment(
             "branch": "Contrastive Learning",
             "model": alignment.get(
                 "model",
-                "CEFM Dual Projection Heads "
-                "(NT-Xent aligned)",
+                (
+                    "CEFM Dual Projection Heads "
+                    "(NT-Xent aligned)"
+                ),
             ),
             "checkpoint": alignment.get(
                 "checkpoint"
@@ -376,7 +425,6 @@ def run_contrastive_alignment(
         }
 
     except Exception as exc:
-
         return {
             "score": None,
             "similarity": None,
@@ -398,10 +446,20 @@ def run_contrastive_alignment(
         }
 
 
+# ============================================================
+# MELANOMA CLASSIFIER
+# ============================================================
+
 def run_melanoma_classifier(
     classification: dict[str, Any] | None = None,
     abcde: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """
+    Expose the primary melanoma classifier result.
+
+    ABCDE and contrastive features are supporting evidence and
+    are not silently mixed into the primary probability here.
+    """
 
     payload = classification or {}
 
@@ -446,10 +504,15 @@ def run_melanoma_classifier(
     }
 
 
+# ============================================================
+# CLIP CONCEPTS
+# ============================================================
+
 def run_clip_concepts(
     abcde: dict[str, Any] | None = None,
     image_features: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Extract clinically meaningful visual concepts."""
 
     features = abcde or {}
 
@@ -476,11 +539,16 @@ def run_clip_concepts(
     }
 
 
+# ============================================================
+# FINAL REPORT
+# ============================================================
+
 def build_final_report(
     classification: dict[str, Any] | None = None,
     abcde: dict[str, Any] | None = None,
     evolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Generate the structured medical report."""
 
     explanation = generate_explanation(
         classification or {},
@@ -518,12 +586,17 @@ def build_final_report(
     }
 
 
+# ============================================================
+# MULTIMODAL PIPELINE
+# ============================================================
+
 def run_multimodal_pipeline(
     classification: dict[str, Any] | None = None,
     abcde: dict[str, Any] | None = None,
     evolution: dict[str, Any] | None = None,
     image_path: str | None = None,
 ) -> dict[str, Any]:
+    """Run all multimodal evidence and reporting stages."""
 
     stage_vit = run_vision_transformer(
         classification
@@ -598,12 +671,27 @@ def run_multimodal_pipeline(
     }
 
 
+# ============================================================
+# SEGMENTATION -> ABCDE
+# ============================================================
+
 def run_image_segmentation_to_abcde(
     image_path: str,
 ) -> dict[str, Any]:
     """
-    Run VM-UNet segmentation and extract ABCDE features from the mask.
-    All clinical features are derived exclusively from the VM-UNet mask.
+    Run UltraLight VM-UNet segmentation and extract ABCDE
+    features from the resulting lesion mask.
+
+    Important:
+        - UltraLight VM-UNet is the only automatic segmentation
+          model used here.
+        - The mask is generated through the project's existing
+          segmentation service.
+        - No SAM2 refinement is performed.
+        - No artificial pixels-per-mm value is used.
+        - Diameter in mm is only available when a real physical
+          calibration is supplied by the main patient-analysis
+          pipeline.
     """
 
     if not image_path:
@@ -612,61 +700,117 @@ def run_image_segmentation_to_abcde(
             "the segmentation-to-ABCDE flow."
         )
 
+    # --------------------------------------------------------
+    # 1. Run the configured UltraLight VM-UNet segmentation
+    # --------------------------------------------------------
     segmentation = segment_with_vmunet(
-        image_path,
+        image_path
     )
 
+    # --------------------------------------------------------
+    # 2. Obtain the actual binary lesion mask
+    #
+    # The existing adapter returns metadata while the existing
+    # segmentation service returns the mask itself.
+    # --------------------------------------------------------
     mask = None
 
     try:
-        mask = segment_lesion(image_path)
+        mask = segment_lesion(
+            image_path
+        )
     except Exception:
         mask = None
 
+    # --------------------------------------------------------
+    # 3. Safe default feature structure
+    # --------------------------------------------------------
     features = {
         "asymmetry": 0.0,
         "border_irregularity": 0.0,
-        "color": {"index": 0.0},
+        "color": {
+            "index": 0.0,
+        },
         "color_index": 0.0,
+        "diameter_pixels": None,
         "diameter_mm": None,
+        "diameter_mm_available": False,
     }
 
+    # --------------------------------------------------------
+    # 4. Extract A/B/C/D from the lesion mask
+    # --------------------------------------------------------
     if mask is not None:
-
         try:
-
-            image = cv2.imread(image_path)
+            image = cv2.imread(
+                image_path
+            )
 
             if image is not None:
-
                 extracted = extract_abcde_features(
                     image,
                     mask,
-                    pixels_per_mm=1.0,
+                    pixels_per_mm=None,
                 )
 
-                color = extracted.get("color", {})
+                color = extracted.get(
+                    "color",
+                    {},
+                ) or {}
+
                 color_index = float(
-                    color.get("index", 0.0) or 0.0
+                    color.get(
+                        "index",
+                        0.0,
+                    )
+                    or 0.0
                 )
-                diameter = extracted.get("diameter", {}) or {}
+
+                diameter = extracted.get(
+                    "diameter",
+                    {},
+                ) or {}
 
                 features = {
-                    "asymmetry": extracted.get("asymmetry", 0.0),
-                    "border_irregularity": extracted.get(
-                        "border_irregularity", 0.0
+                    "asymmetry": float(
+                        extracted.get(
+                            "asymmetry",
+                            0.0,
+                        )
+                        or 0.0
+                    ),
+                    "border_irregularity": float(
+                        extracted.get(
+                            "border_irregularity",
+                            0.0,
+                        )
+                        or 0.0
                     ),
                     "color": {
-                        "h": color.get("h", 0.0),
-                        "s": color.get("s", 0.0),
-                        "v": color.get("v", 0.0),
+                        "h": color.get(
+                            "h",
+                            0.0,
+                        ),
+                        "s": color.get(
+                            "s",
+                            0.0,
+                        ),
+                        "v": color.get(
+                            "v",
+                            0.0,
+                        ),
                         "index": color_index,
                     },
                     "color_index": color_index,
-                    "diameter_mm": diameter.get("max_diameter_mm"),
+                    "diameter_pixels": diameter.get(
+                        "max_diameter_pixels"
+                    ),
+                    "diameter_mm": None,
+                    "diameter_mm_available": False,
                 }
 
         except Exception:
+            # Keep safe defaults if feature extraction fails.
             pass
 
     return {
@@ -676,12 +820,23 @@ def run_image_segmentation_to_abcde(
     }
 
 
+# ============================================================
+# FULL IMAGE PIPELINE
+# ============================================================
+
 def run_full_image_pipeline(
     image_path: str,
     classification: dict[str, Any] | None = None,
     abcde: dict[str, Any] | None = None,
     evolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """
+    Run the complete image-level multimodal pipeline.
+
+    A real image path is expected. If processing fails, the
+    exception is propagated instead of silently returning
+    fabricated/default clinical results.
+    """
 
     if not image_path:
         raise ValueError(
@@ -696,7 +851,6 @@ def run_full_image_pipeline(
     if not os.path.exists(
         resolved
     ):
-
         resolved = os.path.abspath(
             os.path.join(
                 os.getcwd(),
@@ -707,95 +861,75 @@ def run_full_image_pipeline(
     features = abcde or {}
     payload = classification or {}
 
+    # --------------------------------------------------------
+    # Real image pipeline
+    # --------------------------------------------------------
     if os.path.exists(
         resolved
     ):
+        image = cv2.imread(
+            resolved
+        )
 
-        try:
-
-            image = cv2.imread(
-                resolved
+        if image is None:
+            raise ValueError(
+                f"Unable to read image: {resolved}"
             )
 
-            if image is not None:
+        # ----------------------------------------------------
+        # Segmentation -> ABCDE
+        # ----------------------------------------------------
+        segmentation_state = (
+            run_image_segmentation_to_abcde(
+                resolved
+            )
+        )
 
-                segmentation_state = (
-                    run_image_segmentation_to_abcde(
-                        resolved
-                    )
-                )
+        segmented_features = (
+            segmentation_state[
+                "abcde"
+            ]
+        )
 
-                segmented_features = (
-                    segmentation_state[
-                        "abcde"
-                    ]
-                )
+        if segmented_features:
+            features = segmented_features
 
-                if segmented_features:
-                    features = segmented_features
+        # ----------------------------------------------------
+        # Primary melanoma classifier
+        # ----------------------------------------------------
+        payload = classify(
+            resolved,
+            features,
+        )
 
-                payload = classify(
-                    resolved,
-                    features,
-                )
+        # ----------------------------------------------------
+        # Multimodal evidence/reporting
+        # ----------------------------------------------------
+        result = run_multimodal_pipeline(
+            classification=payload,
+            abcde=features,
+            evolution=(
+                evolution
+                or {
+                    "change_detected": False,
+                }
+            ),
+            image_path=resolved,
+        )
 
-                result = run_multimodal_pipeline(
-                    classification=payload,
-                    abcde=features,
-                    evolution=(
-                        evolution
-                        or {
-                            "change_detected": False,
-                        }
-                    ),
-                    image_path=resolved,
-                )
+        result[
+            "input_image"
+        ] = resolved
 
-                result[
-                    "input_image"
-                ] = resolved
+        result[
+            "segmentation_state"
+        ] = segmentation_state
 
-                result[
-                    "segmentation_state"
-                ] = segmentation_state
+        return result
 
-                return result
-
-        except Exception:
-
-            pass
-
-    result = run_multimodal_pipeline(
-        classification=(
-            payload
-            or {
-                "melanoma_probability": 0.5,
-                "risk_level": "low",
-                "predicted_class": "nv",
-            }
-        ),
-        abcde=(
-            features
-            or {
-                "asymmetry": 0.45,
-                "border_irregularity": 0.55,
-                "color": {
-                    "index": 0.5,
-                },
-                "color_index": 0.5,
-            }
-        ),
-        evolution=(
-            evolution
-            or {
-                "change_detected": False,
-            }
-        ),
-        image_path=resolved,
+    # --------------------------------------------------------
+    # No valid image path
+    # --------------------------------------------------------
+    raise FileNotFoundError(
+        f"Image file not found: {resolved}"
     )
-
-    result[
-        "input_image"
-    ] = resolved
-
-    return result

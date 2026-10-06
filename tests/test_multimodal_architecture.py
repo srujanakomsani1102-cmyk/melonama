@@ -38,7 +38,7 @@ def test_multimodal_pipeline_exposes_each_stage():
 
 
 def test_full_image_pipeline_executes_for_real_image_path():
-    image_path = "data/uploads/effdb754e96f47f3a0c523ebd153767b.png"
+    image_path = "data/uploads/0a9b198c02484bf6afeb211ecf7abe2f.jpg"
 
     result = run_full_image_pipeline(image_path)
 
